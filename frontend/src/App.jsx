@@ -1,49 +1,63 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { SignedIn, SignedOut, SignIn, SignUp } from "@clerk/clerk-react";
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import "./App.css";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import { useEffect } from "react";
+import { AuthProvider, useAuthContext } from "./auth/AuthContext";
+import { NotificationProvider } from "./context/NotificationContext";
 
-function App() {
+function RedirectToLanding() {
+  useEffect(() => {
+    window.location.href = "/";
+  }, []);
+  return null;
+}
+
+function PrivateRoute({ children }) {
+  const { isAuthenticated } = useAuthContext();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  return children;
+}
+
+function AppRoutes() {
+  const { isAuthenticated } = useAuthContext();
   return (
     <BrowserRouter>
       <Routes>
         <Route
-          path="/sign-in"
-          element={
-            <SignedOut>
-              <SignIn />
-            </SignedOut>
-          }
+          path="/login"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />}
         />
         <Route
-          path="/sign-up"
-          element={
-            <SignedOut>
-              <SignUp />
-            </SignedOut>
-          }
+          path="/register"
+          element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <RegisterPage />}
         />
         <Route
-          path="/"
+          path="/dashboard"
           element={
-            <>
-              <SignedOut>
-                <Navigate to="/sign-in" replace />
-              </SignedOut>
-              <SignedIn>
-                <Layout />
-              </SignedIn>
-            </>
+            <PrivateRoute>
+              <Layout />
+            </PrivateRoute>
           }
         >
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
+          <Route index element={<Dashboard />} />
         </Route>
-        <Route path="*" element={<Navigate to="/sign-in" replace />} />
+        <Route path="*" element={<RedirectToLanding />} />
       </Routes>
     </BrowserRouter>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <NotificationProvider>
+        <AppRoutes />
+      </NotificationProvider>
+    </AuthProvider>
+  );
+}

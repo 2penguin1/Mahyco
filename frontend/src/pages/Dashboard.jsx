@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
-import { useAuth } from "@clerk/clerk-react";
 import * as api from "../api";
 import "./Dashboard.css";
+import { useAuthContext } from "../auth/AuthContext";
+import { useNotifications } from "../context/NotificationContext";
 
 const TABS = ["upload", "report", "history"];
 
@@ -12,7 +13,8 @@ function classLabel(c) {
 }
 
 export default function Dashboard() {
-  const { getToken } = useAuth();
+  const { getToken } = useAuthContext();
+  const { addNotification } = useNotifications();
   const [tab, setTab] = useState("upload");
   const [file, setFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -46,9 +48,15 @@ export default function Dashboard() {
 
   const handleAnalyze = async () => {
     if (!file) return;
+    const filename = file.name;
     setUploadStatus({ type: "loading", message: "Uploading and analyzing…" });
     setSavedPath("");
     setAnalysis(null);
+    addNotification({
+      message: "Still analysing…",
+      type: "progress",
+      filename,
+    });
     try {
       const result = await api.uploadImage(file, getToken);
       setUploadStatus({ type: "success", message: "Upload complete." });
@@ -59,8 +67,18 @@ export default function Dashboard() {
       setTab("report");
       setReportTab("summary");
       setHistoryLoaded(false);
+      addNotification({
+        message: "Analysis completed",
+        type: "completed",
+        filename,
+      });
     } catch (err) {
       setUploadStatus({ type: "error", message: err.message || "Upload failed" });
+      addNotification({
+        message: "Analysis failed",
+        type: "error",
+        filename,
+      });
     }
   };
 
@@ -91,10 +109,15 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
+      <div className="dashboard-content">
       <header className="dashboard-header">
-        <h1>Dashboard</h1>
+        <h1>{tab === "upload" ? "Upload & Analyze" : tab === "report" ? "Analysis Report" : "History"}</h1>
         <p>
-          Upload a drone agriculture image to run chunking, segmentation, and disease classification (3 classes).
+          {tab === "upload"
+            ? "Please upload an image below. We run chunking, segmentation, and disease classification (healthy, mild, severe)."
+            : tab === "report"
+            ? "View results and chunk-level details for your analyzed image."
+            : "Your past analyses. Open any item to view the full report."}
         </p>
       </header>
 
@@ -117,34 +140,46 @@ export default function Dashboard() {
         {tab === "upload" && (
           <div className="upload-section">
             <div
-              className={`upload-zone ${file ? "has-file" : ""}`}
+              className={`upload-zone ${file ? "has-file" : ""} ${uploadStatus?.type === "loading" ? "is-loading" : ""}`}
               onDrop={handleDrop}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
             >
-              <div className="icon">🛸</div>
-              <h3>Drop your drone image here</h3>
-              <p>Large agriculture land images are cropped into chunks, segmented, and classified (healthy / mild / severe).</p>
+              <div className="upload-zone-cloud">☁</div>
+              <h3>Drop Files Here</h3>
+              <p className="upload-zone-browse">
+                Or browse files from your computer{" "}
+                <label htmlFor="file-input" className="upload-zone-link">here</label>
+              </p>
               <input
                 type="file"
                 accept="image/*"
                 id="file-input"
                 onChange={handleFileInput}
               />
-              <label htmlFor="file-input" className="btn-browse">
-                Browse files
-              </label>
-              {file && <p className="file-name">{file.name}</p>}
-              <button
-                type="button"
-                className="btn-analyze"
-                onClick={handleAnalyze}
-                disabled={!file}
-              >
-                Analyze image
-              </button>
+              {file && (
+                <>
+                  <p className="file-name">{file.name}</p>
+                  <button
+                    type="button"
+                    className="btn-analyze"
+                    onClick={handleAnalyze}
+                    disabled={uploadStatus?.type === "loading"}
+                  >
+                    {uploadStatus?.type === "loading" ? "Analyzing…" : "Analyze image"}
+                  </button>
+                </>
+              )}
             </div>
-            {uploadStatus && (
+            {uploadStatus?.type === "loading" && (
+              <div className="upload-progress">
+                <span className="upload-progress-text">Uploading and analyzing…</span>
+                <div className="upload-progress-bar">
+                  <div className="upload-progress-fill" style={{ width: "70%" }} />
+                </div>
+              </div>
+            )}
+            {uploadStatus && uploadStatus.type !== "loading" && (
               <div className={`upload-status ${uploadStatus.type}`}>
                 {uploadStatus.message}
                 {savedPath && (
@@ -291,44 +326,60 @@ export default function Dashboard() {
 
         {tab === "history" && (
           <div className="history-section">
-            <h3>Analysis history</h3>
+            <p className="history-intro">Past analyses. Open any row to view the full report or download JSON.</p>
             {history.length > 0 ? (
-              <div className="history-list">
-                {history.map((item) => (
-                  <div key={item.id} className="history-item">
-                    <div className="info">
-                      <div className="filename">{item.original_filename}</div>
-                      <div className="meta">{item.created_at}</div>
-                    </div>
-                    <span
-                      className={`score ${
-                        item.overall_health_score >= 70
-                          ? ""
-                          : item.overall_health_score >= 40
-                          ? "medium"
-                          : "low"
-                      }`}
-                    >
-                      {item.overall_health_score}%
-                    </span>
-                    <div className="actions">
-                      <button type="button" onClick={() => openAnalysis(item.id)}>
-                        View
-                      </button>
-                      <button
-                        type="button"
-                        className="primary"
-                        onClick={() =>
-                          api.downloadReport(item.id, getToken).catch(() =>
-                            setUploadStatus({ type: "error", message: "Download failed" })
-                          )
-                        }
-                      >
-                        Download
-                      </button>
-                    </div>
-                  </div>
-                ))}
+              <div className="history-table-wrap">
+                <table className="history-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Date</th>
+                      <th>Score</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((item) => (
+                      <tr key={item.id}>
+                        <td className="history-name">{item.original_filename}</td>
+                        <td className="history-meta">{item.created_at}</td>
+                        <td>
+                          <span
+                            className={`history-score ${
+                              item.overall_health_score >= 70
+                                ? "high"
+                                : item.overall_health_score >= 40
+                                ? "medium"
+                                : "low"
+                            }`}
+                          >
+                            {item.overall_health_score}%
+                          </span>
+                        </td>
+                        <td>
+                          <span className="history-status">Completed</span>
+                        </td>
+                        <td className="history-actions">
+                          <button type="button" className="history-btn" onClick={() => openAnalysis(item.id)}>
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            className="history-btn primary"
+                            onClick={() =>
+                              api.downloadReport(item.id, getToken).catch(() =>
+                                setUploadStatus({ type: "error", message: "Download failed" })
+                              )
+                            }
+                          >
+                            Download
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
               <div className="empty-state">
@@ -339,6 +390,7 @@ export default function Dashboard() {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
