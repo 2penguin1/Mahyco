@@ -1,8 +1,9 @@
 import { Outlet, Link } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+import { useUser, useClerk } from "@clerk/clerk-react";
 
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user } = useUser();
+  const { signOut } = useClerk();
 
   return (
     <div className="app-layout">
@@ -13,19 +14,15 @@ export default function Layout() {
         <div className="app-nav-user">
           {user ? (
             <>
-              <span>{user.full_name}</span>
-              <span className={`role-badge ${user.role === "company" ? "company" : ""}`}>
-                {user.role === "company" ? "Company" : "User"}
-              </span>
-              {user.company_name && <span className="muted">({user.company_name})</span>}
-              <button type="button" onClick={logout}>
+              <span>{user.fullName}</span>
+              <button type="button" onClick={() => signOut()}>
                 Sign out
               </button>
             </>
           ) : (
             <>
-              <Link to="/login">Login</Link>
-              <Link to="/register">Register</Link>
+              <Link to="/sign-in">Login</Link>
+              <Link to="/sign-up">Register</Link>
             </>
           )}
         </div>

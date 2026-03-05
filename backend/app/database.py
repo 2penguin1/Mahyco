@@ -8,8 +8,15 @@ db = None
 
 async def connect_db():
     global client, db
-    client = AsyncIOMotorClient(_settings.mongodb_uri)
-    db = client[_settings.mahyco_db]
+    try:
+        client = AsyncIOMotorClient(_settings.mongodb_uri)
+        db = client[_settings.mahyco_db]
+        # Force an early connection attempt; otherwise motor defers and failures appear later.
+        await db.command("ping")
+    except Exception:
+        # Allow running without MongoDB (in-memory fallback in routers).
+        client = None
+        db = None
 
 
 async def close_db():

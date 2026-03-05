@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "@clerk/clerk-react";
 import * as api from "../api";
 import "./Dashboard.css";
 
@@ -12,7 +12,7 @@ function classLabel(c) {
 }
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { getToken } = useAuth();
   const [tab, setTab] = useState("upload");
   const [file, setFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [reportTab, setReportTab] = useState("summary");
   const [history, setHistory] = useState([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [savedPath, setSavedPath] = useState("");
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
@@ -46,10 +47,14 @@ export default function Dashboard() {
   const handleAnalyze = async () => {
     if (!file) return;
     setUploadStatus({ type: "loading", message: "Uploading and analyzing…" });
+    setSavedPath("");
     setAnalysis(null);
     try {
-      const result = await api.uploadImage(file);
-      setUploadStatus({ type: "success", message: "Analysis complete." });
+      const result = await api.uploadImage(file, getToken);
+      setUploadStatus({ type: "success", message: "Upload complete." });
+      if (result.stored_path) {
+        setSavedPath(result.stored_path);
+      }
       setAnalysis(result);
       setTab("report");
       setReportTab("summary");
@@ -62,7 +67,7 @@ export default function Dashboard() {
   const loadHistory = useCallback(async () => {
     if (historyLoaded) return;
     try {
-      const list = await api.getHistory();
+      const list = await api.getHistory(0, 50, getToken);
       setHistory(list);
       setHistoryLoaded(true);
     } catch {
@@ -73,7 +78,7 @@ export default function Dashboard() {
 
   const openAnalysis = async (id) => {
     try {
-      const data = await api.getAnalysis(id);
+      const data = await api.getAnalysis(id, getToken);
       setAnalysis(data);
       setTab("report");
       setReportTab("summary");
@@ -142,6 +147,11 @@ export default function Dashboard() {
             {uploadStatus && (
               <div className={`upload-status ${uploadStatus.type}`}>
                 {uploadStatus.message}
+                {savedPath && (
+                  <div style={{ marginTop: "0.5rem", wordBreak: "break-all", fontSize: "0.85rem" }}>
+                    <strong>Saved path:</strong> {savedPath}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -152,6 +162,11 @@ export default function Dashboard() {
             {analysis ? (
               <>
                 <h3>Report: {analysis.original_filename}</h3>
+                {analysis.stored_path && (
+                  <p className="muted" style={{ marginBottom: "0.75rem", wordBreak: "break-all", fontSize: "0.85rem" }}>
+                    <strong>Image path:</strong> {analysis.stored_path}
+                  </p>
+                )}
                 <div className="health-score-visual" style={{ marginBottom: "1.5rem" }}>
                   <div
                     className="health-ring"
@@ -255,7 +270,7 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() =>
-                      api.downloadReport(analysis.analysis_id).catch(() =>
+                      api.downloadReport(analysis.analysis_id, getToken).catch(() =>
                         setUploadStatus({ type: "error", message: "Download failed" })
                       )
                     }
@@ -304,7 +319,7 @@ export default function Dashboard() {
                         type="button"
                         className="primary"
                         onClick={() =>
-                          api.downloadReport(item.id).catch(() =>
+                          api.downloadReport(item.id, getToken).catch(() =>
                             setUploadStatus({ type: "error", message: "Download failed" })
                           )
                         }

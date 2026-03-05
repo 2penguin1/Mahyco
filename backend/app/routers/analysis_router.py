@@ -1,13 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, HTTPException, status, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
-from app.auth import get_current_user_optional
 from app.database import get_db
-from app.services.image_service import (
-    save_upload,
-    simulate_chunk_and_classify,
-    compute_summary,
-    ensure_upload_dir,
-)
+from app.services.image_service import save_upload_stream, run_model, compute_summary, ensure_upload_dir
 from app.models.analysis import AnalysisResult, ChunkResult, AnalysisListItem
 from app.config import get_settings
 from datetime import datetime
@@ -18,22 +12,28 @@ import json
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 _settings = get_settings()
 
+# In-memory fallback when MongoDB is unavailable
+_MEM_ANALYSES: dict[str, dict] = {}
+
 
 @router.get("/history/list", response_model=list)
-async def list_history(
-    current_user: dict = Depends(get_current_user_optional),
-    skip: int = 0,
-    limit: int = 50,
-):
+async def list_history(skip: int = 0, limit: int = 50):
     db = get_db()
     if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
-    cursor = (
-        db.analyses.find({"user_id": current_user["id"]})
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(limit)
-    )
+        docs = list(_MEM_ANALYSES.values())
+        docs.sort(key=lambda d: d.get("created_at") or datetime.min, reverse=True)
+        docs = docs[skip : skip + limit]
+        return [
+            {
+                "id": str(d["_id"]),
+                "original_filename": d["original_filename"],
+                "overall_health_score": d["overall_health_score"],
+                "dominant_class": d["dominant_class"],
+                "created_at": d["created_at"].isoformat() if isinstance(d.get("created_at"), datetime) else str(d.get("created_at")),
+            }
+            for d in docs
+        ]
+    cursor = db.analyses.find({}).sort("created_at", -1).skip(skip).limit(limit)
     items = []
     async for doc in cursor:
         items.append(
@@ -49,26 +49,27 @@ async def list_history(
 
 
 @router.post("/upload")
-async def upload_and_analyze(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user_optional),
-):
+async def upload_and_analyze(file: UploadFile = File(...)):
     db = get_db()
-    if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
-    content = await file.read()
-    if len(content) > 50 * 1024 * 1024:  # 50MB
-        raise HTTPException(status_code=400, detail="Image too large (max 50MB)")
-    stored_name, size_mb = save_upload(content, file.filename or "image.png")
-    chunks, elapsed = simulate_chunk_and_classify(content)
+    stored_name, size_mb = save_upload_stream(file, file.filename or "image")
+    stored_path = os.path.abspath(os.path.join(_settings.upload_dir, stored_name))
+    try:
+        # run_model only needs the saved path for the real model;
+        # we pass empty content to avoid loading huge files into memory.
+        chunks, elapsed = await run_model(b"", stored_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Model inference failed. Make sure the model server is running at MODEL_API_URL. Error: {e}",
+        )
     summary = compute_summary(chunks)
     analysis_id = str(ObjectId())
     now = datetime.utcnow()
     doc = {
         "_id": analysis_id,
-        "user_id": current_user["id"],
+        "user_id": "anonymous",
         "original_filename": file.filename or "image.png",
         "stored_filename": stored_name,
         "image_size_mb": round(size_mb, 2),
@@ -81,8 +82,12 @@ async def upload_and_analyze(
         "chunk_results": [c.model_dump() for c in chunks],
         "processing_time_seconds": elapsed,
         "created_at": now,
+        "stored_path": stored_path,
     }
-    await db.analyses.insert_one(doc)
+    if db is not None:
+        await db.analyses.insert_one(doc)
+    else:
+        _MEM_ANALYSES[analysis_id] = doc
     return {
         "analysis_id": analysis_id,
         "original_filename": doc["original_filename"],
@@ -90,22 +95,19 @@ async def upload_and_analyze(
         **summary,
         "processing_time_seconds": elapsed,
         "created_at": now.isoformat(),
+        "stored_path": stored_path,
     }
 
 
 @router.get("/{analysis_id}")
-async def get_analysis(
-    analysis_id: str,
-    current_user: dict = Depends(get_current_user_optional),
-):
+async def get_analysis(analysis_id: str):
     db = get_db()
     if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
-    doc = await db.analyses.find_one({"_id": analysis_id})
+        doc = _MEM_ANALYSES.get(analysis_id)
+    else:
+        doc = await db.analyses.find_one({"_id": analysis_id})
     if not doc:
         raise HTTPException(status_code=404, detail="Analysis not found")
-    if doc["user_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Not your analysis")
     doc["id"] = str(doc["_id"])
     doc["created_at"] = doc["created_at"].isoformat()
     for c in doc.get("chunk_results", []):
@@ -115,15 +117,13 @@ async def get_analysis(
 
 
 @router.get("/{analysis_id}/download/report")
-async def download_report(
-    analysis_id: str,
-    current_user: dict = Depends(get_current_user_optional),
-):
+async def download_report(analysis_id: str):
     db = get_db()
     if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
-    doc = await db.analyses.find_one({"_id": analysis_id})
-    if not doc or doc["user_id"] != current_user["id"]:
+        doc = _MEM_ANALYSES.get(analysis_id)
+    else:
+        doc = await db.analyses.find_one({"_id": analysis_id})
+    if not doc:
         raise HTTPException(status_code=404, detail="Analysis not found")
     report = {
         "analysis_id": analysis_id,
