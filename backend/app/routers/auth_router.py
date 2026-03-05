@@ -8,6 +8,10 @@ from bson import ObjectId
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# In-memory user store for environments without MongoDB.
+# This is for local development only and is NOT persistent.
+_MEM_USERS: dict[str, dict] = {}
+
 
 def user_to_response(doc: dict) -> UserResponse:
     return UserResponse(
@@ -23,26 +27,45 @@ def user_to_response(doc: dict) -> UserResponse:
 @router.post("/register", response_model=Token)
 async def register(data: UserCreate):
     db = get_db()
-    if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
-    existing = await db.users.find_one({"email": data.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
     now = datetime.utcnow()
-    doc = {
-        "email": data.email,
-        "hashed_password": get_password_hash(data.password),
-        "full_name": data.full_name,
-        "role": data.role,
-        "company_name": data.company_name if data.role == "company" else None,
-        "created_at": now,
-        "disabled": False,
-    }
-    r = await db.users.insert_one(doc)
-    doc["_id"] = r.inserted_id
+
+    if db is None:
+        # In-memory fallback when MongoDB is not available
+        import sys
+        print("Auth register: using in-memory store (no MongoDB).", file=sys.stderr)
+        if data.email in _MEM_USERS:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        oid = ObjectId()
+        doc = {
+            "_id": oid,
+            "email": data.email,
+            "hashed_password": get_password_hash(data.password),
+            "full_name": data.full_name,
+            "role": data.role,
+            "company_name": data.company_name if data.role == "company" else None,
+            "created_at": now,
+            "disabled": False,
+        }
+        _MEM_USERS[data.email] = doc
+    else:
+        existing = await db.users.find_one({"email": data.email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        doc = {
+            "email": data.email,
+            "hashed_password": get_password_hash(data.password),
+            "full_name": data.full_name,
+            "role": data.role,
+            "company_name": data.company_name if data.role == "company" else None,
+            "created_at": now,
+            "disabled": False,
+        }
+        r = await db.users.insert_one(doc)
+        doc["_id"] = r.inserted_id
+
     user_resp = user_to_response(doc)
     token = create_access_token(
-        {"sub": str(r.inserted_id), "email": data.email, "role": data.role}
+        {"sub": str(doc["_id"]), "email": data.email, "role": data.role}
     )
     return Token(access_token=token, token_type="bearer", user=user_resp)
 
@@ -53,8 +76,9 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     password = form_data.password
     db = get_db()
     if db is None:
-        raise HTTPException(status_code=500, detail="Database not available")
-    user = await db.users.find_one({"email": email})
+        user = _MEM_USERS.get(email)
+    else:
+        user = await db.users.find_one({"email": email})
     if not user or not verify_password(password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
