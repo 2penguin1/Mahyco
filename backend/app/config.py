@@ -9,16 +9,25 @@ class Settings(BaseSettings):
         protected_namespaces=("settings_",),
         extra="ignore",
     )
-    mongodb_uri: str = "mongodb://localhost:27017"
-    mahyco_db: str = "mahyco_db"
+
+    # PostgreSQL
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/mahyco_db"
+
+    # File uploads
     upload_dir: str = "./uploads"
+
+    # JWT
     jwt_secret: str = "change-me-in-production-use-openssl-rand-hex-32"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
-    clerk_jwks_url: str | None = None
-    clerk_secret_key: str | None = None
+    redis_url: str = "redis://localhost:6379/0"
+
+    # ML model
     model_api_url: str | None = None
     website_integration_dir: str | None = None
+
+    # Debugger-style logging — set to true in .env to enable verbose terminal output
+    debug_logging: bool = False
 
 
 @lru_cache

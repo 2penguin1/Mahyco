@@ -1,98 +1,74 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordRequestForm
-from app.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from app.database import get_session
+from app.models.orm import User
 from app.models.user import UserCreate, UserResponse, Token
-from app.auth import get_password_hash, create_access_token, get_current_user, verify_password
-from datetime import datetime
-from bson import ObjectId
+from app.auth import get_password_hash, create_access_token, verify_password, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# In-memory user store for environments without MongoDB.
-# This is for local development only and is NOT persistent.
-_MEM_USERS: dict[str, dict] = {}
 
-
-def user_to_response(doc: dict) -> UserResponse:
+def user_to_response(user: User) -> UserResponse:
     return UserResponse(
-        id=str(doc["_id"]),
-        email=doc["email"],
-        full_name=doc["full_name"],
-        role=doc.get("role", "user"),
-        company_name=doc.get("company_name"),
-        created_at=doc.get("created_at"),
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,  # type: ignore[arg-type]
+        company_name=user.company_name,
+        created_at=user.created_at,
     )
 
 
 @router.post("/register", response_model=Token)
-async def register(data: UserCreate):
-    db = get_db()
-    now = datetime.utcnow()
+async def register(data: UserCreate, session: AsyncSession = Depends(get_session)):
+    # Check for existing email
+    result = await session.execute(select(User).where(User.email == data.email))
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-    if db is None:
-        # In-memory fallback when MongoDB is not available
-        import sys
-        print("Auth register: using in-memory store (no MongoDB).", file=sys.stderr)
-        if data.email in _MEM_USERS:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        oid = ObjectId()
-        doc = {
-            "_id": oid,
-            "email": data.email,
-            "hashed_password": get_password_hash(data.password),
-            "full_name": data.full_name,
-            "role": data.role,
-            "company_name": data.company_name if data.role == "company" else None,
-            "created_at": now,
-            "disabled": False,
-        }
-        _MEM_USERS[data.email] = doc
-    else:
-        existing = await db.users.find_one({"email": data.email})
-        if existing:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        doc = {
-            "email": data.email,
-            "hashed_password": get_password_hash(data.password),
-            "full_name": data.full_name,
-            "role": data.role,
-            "company_name": data.company_name if data.role == "company" else None,
-            "created_at": now,
-            "disabled": False,
-        }
-        r = await db.users.insert_one(doc)
-        doc["_id"] = r.inserted_id
-
-    user_resp = user_to_response(doc)
-    token = create_access_token(
-        {"sub": str(doc["_id"]), "email": data.email, "role": data.role}
+    user = User(
+        email=data.email,
+        hashed_password=get_password_hash(data.password),
+        full_name=data.full_name,
+        role=data.role,
+        company_name=data.company_name if data.role == "company" else None,
+        disabled=False,
     )
-    return Token(access_token=token, token_type="bearer", user=user_resp)
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    token = create_access_token(
+        {"sub": str(user.id), "email": user.email, "role": user.role}
+    )
+    return Token(access_token=token, token_type="bearer", user=user_to_response(user))
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    email = form_data.username
-    password = form_data.password
-    db = get_db()
-    if db is None:
-        user = _MEM_USERS.get(email)
-    else:
-        user = await db.users.find_one({"email": email})
-    if not user or not verify_password(password, user["hashed_password"]):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(User).where(User.email == form_data.username))
+    user = result.scalar_one_or_none()
+
+    if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
-    if user.get("disabled"):
+    if user.disabled:
         raise HTTPException(status_code=400, detail="Account disabled")
-    user_resp = user_to_response(user)
+
     token = create_access_token(
-        {"sub": str(user["_id"]), "email": user["email"], "role": user.get("role", "user")}
+        {"sub": str(user.id), "email": user.email, "role": user.role}
     )
-    return Token(access_token=token, token_type="bearer", user=user_resp)
+    return Token(access_token=token, token_type="bearer", user=user_to_response(user))
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(current_user: dict = Depends(get_current_user)):
+async def me(current_user: User = Depends(get_current_user)):
     return user_to_response(current_user)

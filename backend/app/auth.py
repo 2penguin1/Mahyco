@@ -3,16 +3,20 @@ from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 from app.config import get_settings
+from app.database import get_session
+from app.models.orm import User
 from app.models.user import TokenData, Role
 
 settings = get_settings()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 def _to_bcrypt_bytes(password: str) -> bytes:
-    """Bcrypt accepts at most 72 bytes. Truncate so any password length works."""
     if not isinstance(password, str):
         password = str(password)
     return password.encode("utf-8")[:72]
@@ -49,9 +53,10 @@ def decode_token(token: str) -> TokenData | None:
         return None
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    from app.database import get_db
-    from bson import ObjectId
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_session),
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -60,54 +65,35 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     token_data = decode_token(token)
     if token_data is None:
         raise credentials_exception
-    db = get_db()
-    if db is None:
-        raise credentials_exception
+
+    import uuid
     try:
-        oid = ObjectId(token_data.user_id)
-    except Exception:
+        uid = uuid.UUID(token_data.user_id)
+    except (ValueError, TypeError):
         raise credentials_exception
-    user = await db.users.find_one({"_id": oid})
-    if user is None:
+
+    result = await session.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+    if user is None or user.disabled:
         raise credentials_exception
-    user["id"] = str(user["_id"])
     return user
 
 
-# Guest user for unauthenticated access (login disabled)
-GUEST_USER = {"id": "anonymous", "role": "user"}
-
-
-async def get_current_user_optional(token: str | None = Depends(oauth2_scheme_optional)):
-    """Returns current user if token valid, else guest (anonymous). Use when login is disabled."""
+async def get_current_user_optional(
+    token: str | None = Depends(oauth2_scheme_optional),
+    session: AsyncSession = Depends(get_session),
+) -> User | None:
+    """Returns the User row if token is valid, else None (guest)."""
     if not token:
-        return GUEST_USER
+        return None
     token_data = decode_token(token)
     if token_data is None:
-        return GUEST_USER
-    from app.database import get_db
-    from bson import ObjectId
-    db = get_db()
-    if db is None:
-        return GUEST_USER
+        return None
+    import uuid
     try:
-        oid = ObjectId(token_data.user_id)
-    except Exception:
-        return GUEST_USER
-    user = await db.users.find_one({"_id": oid})
-    if user is None:
-        return GUEST_USER
-    user["id"] = str(user["_id"])
-    return user
-
-
-def require_role(*allowed: Role):
-    async def role_checker(current_user: dict = Depends(get_current_user)):
-        role = current_user.get("role", "user")
-        if role not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not allowed for this role",
-            )
-        return current_user
-    return role_checker
+        uid = uuid.UUID(token_data.user_id)
+    except (ValueError, TypeError):
+        return None
+    result = await session.execute(select(User).where(User.id == uid))
+    user = result.scalar_one_or_none()
+    return user if user and not user.disabled else None

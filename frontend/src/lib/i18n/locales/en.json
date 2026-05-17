@@ -1,0 +1,46 @@
+{
+  "topbar": {
+    "searchPlaceholder": "Search analyses, history…",
+    "notifications": "Notifications",
+    "toggleSidebar": "Toggle sidebar"
+  },
+  "sidebar": {
+    "sections": {
+      "main": "Main"
+    },
+    "items": {
+      "dashboard": "Dashboard",
+      "profile": "Profile"
+    }
+  },
+  "profile": {
+    "title": "Profile",
+    "email": "Email",
+    "role": "Role",
+    "logout": "Sign Out",
+    "verified": "Verified",
+    "unverified": "Unverified",
+    "accountDetails": "Account Details",
+    "authentication": "Authentication",
+    "loginProvider": "Login Provider",
+    "lastUpdated": "Last Updated",
+    "emailVerification": "Email Verification",
+    "emailVerified": "Email is verified",
+    "emailNotVerified": "Email not verified",
+    "active": "Active",
+    "pending": "Pending",
+    "manageAccount": "Manage Account",
+    "manageAccountDesc": "Update your account preferences and settings.",
+    "manageAccountSettings": "Go to account settings"
+  },
+  "common": {
+    "loading": "Loading…",
+    "error": "An error occurred",
+    "retry": "Retry",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "close": "Close"
+  }
+}
