@@ -1,3 +1,77 @@
+## Setup (Full)
+**Prerequisites:**
+- **Python:** 3.10 or newer
+- **Node.js / npm:** Node 18+ recommended (or Bun / pnpm)
+- **Git**
+- **(Optional GPU)**: CUDA 12.4 for GPU builds — if you need GPU-enabled PyTorch, use the provided `torch_cu124.whl` or install the correct wheel for your system.
+**1) Backend (FastAPI)**
+- Create and activate a virtual environment, then install Python dependencies:
+
+```bash
+cd backend
+python -m venv .venv
+.\.venv\Scripts\activate   # Windows
+# source .venv/bin/activate   # macOS / Linux
+pip install --upgrade pip
+pip install -r requirements.txt
+- If you want to use the included CUDA PyTorch wheel (only for compatible GPUs/OS):
+
+```bash
+# from repository root
+cd backend
+pip install ../torch_cu124.whl
+- Copy and edit environment variables:
+
+```bash
+cp .env.example .env
+# Edit backend/.env and set at minimum: MONGODB_URI, MAHYCO_DB, UPLOAD_DIR, JWT_SECRET
+- Run DB migrations (if needed) and start the API:
+
+```bash
+# run migrations (requires alembic in your env)
+alembic upgrade head
+
+```bash
+# start dev server
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+API docs will be available at `http://localhost:8000/docs`.
+**2) Frontend (Vite + React)**
+
+- Install and run the frontend (use `npm` here since `package-lock.json` is provided):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+- The app will be served at `http://localhost:3000` by default.
+**3) Models, Weights & Integration**
+
+- Model weights and example artifacts may be present at the repository root (e.g. `best.pt`, `efficientnet_b4_A4000_final.pth`) or under `frontend/weights/`. The backend looks for uploads in the path configured by `UPLOAD_DIR` in `backend/.env` (see `.env.example`).
+- If you have external model integration, set `WEBSITE_INTEGRATION_DIR` or `MODEL_API_URL` in `backend/.env`.
+
+**4) Common commands**
+
+- Run backend tests (if present):
+```bash
+cd backend
+pytest
+```
+- Lint / typecheck frontend:
+```bash
+cd frontend
+npm run lint
+```
+
+**5) Troubleshooting & notes**
+- If you see import errors for Torch or mismatched CUDA, remove any local wheel installs and install CPU-only `torch` (or the correct wheel for your platform).
+- Large model weights are intentionally excluded from Git. Keep them outside of version control or store them in an artifact store / cloud bucket.
+
+---
+
+If you'd like, I can also add a small `scripts/` helper for creating the venv and installing requirements, or generate a concise `CONTRIBUTING.md` with these commands.
 # Mahyco – Drone Agriculture Land Analysis
 
 **New to this project?** → **[docs/START_HERE.md](docs/START_HERE.md)** – step-by-step from MongoDB Compass to running the app.

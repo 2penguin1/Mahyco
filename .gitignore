@@ -68,3 +68,25 @@ frontend_template/
 venv
 best.pt
 efficientnet_b4_A4000_final.pth
+
+# Root uploads (user-generated reports, etc.)
+uploads/
+
+# Model artifacts / large weights
+*.pt
+*.pth
+*.ckpt
+*.bin
+torch_cu124.whl
+
+# Python / tooling caches
+.mypy_cache/
+.pytest_cache/
+.ropeproject
+
+# Jupyter
+.ipynb_checkpoints/
+
+# SSH / keys
+*.pem
+*.key
