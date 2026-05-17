@@ -1,11 +1,71 @@
-## Setup (Full)
-**Prerequisites:**
+# Mahyco
+
+Drone agriculture land analysis platform for uploading large orthomosaic images, running single-image analysis, and processing batch jobs with a Celery worker.
+
+## What this repo contains
+
+- A **FastAPI** backend with JWT auth, PostgreSQL, SQLAlchemy, and Alembic migrations.
+- A **React + Vite** frontend with local token storage and authenticated dashboard routes.
+- An optional **local model pipeline** in `website_integration/` for YOLO + EfficientNet inference.
+- Batch processing through **Celery + Redis**.
+
+## Current stack
+
+- **Backend:** FastAPI, SQLAlchemy, Alembic, PostgreSQL
+- **Async jobs:** Celery, Redis
+- **Frontend:** React 18, Vite, TypeScript
+- **Auth:** Custom JWT auth with email/password login and registration
+- **Model runtime:** Optional local integration via `WEBSITE_INTEGRATION_DIR`, otherwise simulation mode
+
+## Repository layout
+
+```text
+Mahyco/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── auth.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── celery_app.py
+│   │   ├── tasks.py
+│   │   ├── models/
+│   │   ├── routers/
+│   │   └── services/
+│   ├── alembic/
+│   ├── alembic.ini
+│   ├── requirements.txt
+│   └── .env.example
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── components/
+│   │   ├── lib/
+│   │   └── pages/
+│   ├── public/
+│   ├── package.json
+│   └── README.md
+├── website_integration/
+├── uploads/
+├── README.md
+└── root legacy files such as `requirements.txt`
+```
+
+## Prerequisites
+
 - **Python:** 3.10 or newer
-- **Node.js / npm:** Node 18+ recommended (or Bun / pnpm)
+- **Node.js / npm:** Node 18+ recommended
+- **PostgreSQL:** reachable from the backend
+- **Redis:** required for batch jobs and Celery worker state
 - **Git**
-- **(Optional GPU)**: CUDA 12.4 for GPU builds — if you need GPU-enabled PyTorch, use the provided `torch_cu124.whl` or install the correct wheel for your system.
-**1) Backend (FastAPI)**
-- Create and activate a virtual environment, then install Python dependencies:
+- **Optional:** CUDA-capable GPU if you want to use the local model pipeline on compatible hardware
+
+## Backend setup
+
+All backend commands below assume you are running them from the `backend/` directory.
+
+### 1) Create a virtual environment and install dependencies
 
 ```bash
 cd backend
@@ -14,175 +74,133 @@ python -m venv .venv
 # source .venv/bin/activate   # macOS / Linux
 pip install --upgrade pip
 pip install -r requirements.txt
-- If you want to use the included CUDA PyTorch wheel (only for compatible GPUs/OS):
+```
+
+If you are on Windows and want the local model integration, make sure the PyTorch / CUDA wheel matches your machine before installing any GPU-specific dependencies.
+
+### 2) Configure environment variables
+
+Copy the example file and edit `backend/.env`:
 
 ```bash
-# from repository root
-cd backend
-pip install ../torch_cu124.whl
-- Copy and edit environment variables:
+copy .env.example .env
+```
+
+Required values:
+
+- `DATABASE_URL` - PostgreSQL connection string, for example `postgresql+asyncpg://postgres:postgres@localhost:5432/mahyco_db`
+- `JWT_SECRET` - a long random secret for token signing
+- `UPLOAD_DIR` - writable folder for uploads and generated reports
+- `REDIS_URL` - Redis URL used by Celery, for example `redis://localhost:6379/0`
+
+Optional values:
+
+- `MODEL_API_URL` - external model endpoint, if you are proxying inference to another service
+- `WEBSITE_INTEGRATION_DIR` - path to the local model integration folder that contains `scripts/` and `weights/`
+- `DEBUG_LOGGING` - set to `true` for more verbose logs
+- `ACCESS_TOKEN_EXPIRE_MINUTES` - change if you want shorter or longer JWT sessions
+
+Important: `UPLOAD_DIR` is resolved relative to the backend process working directory unless you use an absolute path. If you start the server from `backend/`, `./uploads` becomes `backend/uploads`. If you start it from the repo root, it becomes `uploads/`.
+
+### 3) Run database migrations
 
 ```bash
-cp .env.example .env
-# Edit backend/.env and set at minimum: MONGODB_URI, MAHYCO_DB, UPLOAD_DIR, JWT_SECRET
-- Run DB migrations (if needed) and start the API:
-
-```bash
-# run migrations (requires alembic in your env)
 alembic upgrade head
+```
+
+### 4) Start the API server
 
 ```bash
-# start dev server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-API docs will be available at `http://localhost:8000/docs`.
-**2) Frontend (Vite + React)**
+API docs will be available at `http://127.0.0.1:8000/docs`.
 
-- Install and run the frontend (use `npm` here since `package-lock.json` is provided):
+### 5) Start the Celery worker
+
+Batch jobs require Redis plus a Celery worker.
+
+On Windows:
+
+```bash
+celery -A app.celery_app worker --loglevel=info --pool=solo
+```
+
+On macOS/Linux:
+
+```bash
+celery -A app.celery_app worker --loglevel=info
+```
+
+## Frontend setup
+
+The frontend uses Vite, so the default dev server port is `5173`.
+
+### 1) Install dependencies
 
 ```bash
 cd frontend
 npm install
+```
+
+### 2) Configure frontend API URL
+
+Create `frontend/.env` if you need to override the API base URL:
+
+```bash
+VITE_API_URL=http://127.0.0.1:8000/api
+```
+
+If `VITE_API_URL` is not set, the frontend falls back to `http://127.0.0.1:8000/api`.
+
+### 3) Start the frontend
+
+```bash
 npm run dev
 ```
-- The app will be served at `http://localhost:3000` by default.
-**3) Models, Weights & Integration**
 
-- Model weights and example artifacts may be present at the repository root (e.g. `best.pt`, `efficientnet_b4_A4000_final.pth`) or under `frontend/weights/`. The backend looks for uploads in the path configured by `UPLOAD_DIR` in `backend/.env` (see `.env.example`).
-- If you have external model integration, set `WEBSITE_INTEGRATION_DIR` or `MODEL_API_URL` in `backend/.env`.
+Open the app at `http://localhost:5173`.
 
-**4) Common commands**
+### 4) Optional frontend checks
 
-- Run backend tests (if present):
 ```bash
-cd backend
-pytest
-```
-- Lint / typecheck frontend:
-```bash
-cd frontend
 npm run lint
+npm run build
 ```
 
-**5) Troubleshooting & notes**
-- If you see import errors for Torch or mismatched CUDA, remove any local wheel installs and install CPU-only `torch` (or the correct wheel for your platform).
-- Large model weights are intentionally excluded from Git. Keep them outside of version control or store them in an artifact store / cloud bucket.
+## Runtime flow
+
+- **Auth:** users register and log in through `/api/auth/register` and `/api/auth/login`, then the frontend stores the JWT in local storage.
+- **Single image analysis:** uploads hit `/api/analysis/upload` and write analysis records to PostgreSQL.
+- **Batch processing:** `/api/batch/submit` scans a folder of images and dispatches a Celery task.
+- **History and details:** analysis and batch routes read from the database and return JSON results for the dashboard.
+
+## Database tables
+
+The current ORM models are:
+
+- `users`
+- `analyses`
+- `batch_jobs`
+
+## Optional local model integration
+
+If `WEBSITE_INTEGRATION_DIR` is set, the backend uses the local `website_integration/scripts/yolo_wrapper.py` and `website_integration/scripts/classify_wrapper.py` pipeline instead of simulation mode.
+
+If it is not set, the backend falls back to the built-in simulation path for single-image analysis.
+
+## Common troubleshooting
+
+- If authentication fails, confirm `JWT_SECRET` is set and the frontend is pointing at the correct `VITE_API_URL`.
+- If batch jobs never advance, make sure Redis is running and the Celery worker is alive.
+- If model inference fails, verify `WEBSITE_INTEGRATION_DIR` points to a directory with the expected `scripts/` files.
+- If uploads are written to the wrong folder, check the current working directory and your `UPLOAD_DIR` value.
+- If you were previously following MongoDB instructions, ignore them. The current backend uses PostgreSQL, not MongoDB.
+
+## Notes on legacy files
+
+The repo still contains some older artifacts such as the root `requirements.txt`. The authoritative dependency set for the current backend is `backend/requirements.txt`.
 
 ---
 
-If you'd like, I can also add a small `scripts/` helper for creating the venv and installing requirements, or generate a concise `CONTRIBUTING.md` with these commands.
-# Mahyco – Drone Agriculture Land Analysis
-
-**New to this project?** → **[docs/START_HERE.md](docs/START_HERE.md)** – step-by-step from MongoDB Compass to running the app.
-
-Full-stack app for **Mahyco**: upload large drone agriculture images, chunk/segment them, and classify disease into three classes (healthy, mild infection, severe infection). Includes authentication (user + company), analysis report tabs, download, and history.
-
-## Stack
-
-- **Frontend:** React (Vite), HTML, CSS
-- **Backend:** FastAPI, MongoDB (Motor)
-- **Auth:** JWT (user and company roles)
-
-## Quick start
-
-### 1. MongoDB
-
-Ensure MongoDB is running (local or Atlas). Set `MONGODB_URI` in backend `.env`.
-
-- **Local:** `MONGODB_URI=mongodb://localhost:27017`
-- **Atlas:** use the connection string from your cluster (see **[docs/MONGODB_SETUP.md](docs/MONGODB_SETUP.md)** for step-by-step setup).
-
-### 2. Backend
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate   # Windows
-# source venv/bin/activate  # macOS/Linux
-pip install -r requirements.txt
-cp .env.example .env     # edit .env with MONGODB_URI, JWT_SECRET
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-API docs: http://localhost:8000/docs
-
-### 3. Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-App: http://localhost:3000
-
-### 4. Environment
-
-- **Backend** (`backend/.env`): `MONGODB_URI`, `MAHYCO_DB`, `JWT_SECRET`, `UPLOAD_DIR`
-- **Frontend** (`frontend/.env`): `VITE_API_URL=http://localhost:8000/api`
-
-## Features
-
-- **Auth:** Register / login as **User** or **Company** (company name optional for company accounts).
-- **Upload:** Drag-and-drop or browse to upload a drone agriculture image (max 50MB).
-- **Analysis:** Backend simulates cropping into chunks, segmentation, and 3-class disease classification (healthy / mild_infection / severe_infection). Replace `image_service.simulate_chunk_and_classify` with your real model later.
-- **Report:** Tabs for summary and chunk-level details; overall health score and class counts.
-- **Download:** Download full analysis report as JSON.
-- **History:** List past analyses; open report or download from history.
-
-## Project layout
-
-```
-Mahyco/
-├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── database.py
-│   │   ├── auth.py
-│   │   ├── models/
-│   │   ├── routers/
-│   │   └── services/
-│   ├── requirements.txt
-│   └── .env.example
-├── frontend/
-│   ├── src/
-│   │   ├── api.js
-│   │   ├── context/AuthContext.jsx
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── index.css
-│   └── package.json
-└── README.md
-```
-
-## Pushing to GitHub
-
-1. **Create a new repository** on GitHub (do not add a README or .gitignore).
-
-2. **Initial commit** (if you haven’t yet):
-   ```bash
-   git add .
-   git commit -m "Initial commit: Mahyco drone agriculture analysis app"
-   ```
-
-3. **Add remote and push**:
-   ```bash
-   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-   git branch -M main
-   git push -u origin main
-   ```
-   Replace `YOUR_USERNAME` and `YOUR_REPO_NAME` with your GitHub username and repo name.
-
-4. **Security:** Never commit `backend/.env` or `frontend/.env` — they are in `.gitignore`. Use `.env.example` as a template and set real values locally or in GitHub Secrets for CI.
-
----
-
-## Replacing the simulator with real models
-
-In `backend/app/services/image_service.py`:
-
-1. **Chunking:** Use your real logic to split the image into tiles (e.g. 256×256).
-2. **Classification:** Call your classifier per chunk and map outputs to `healthy` / `mild_infection` / `severe_infection`.
-3. Keep the same `ChunkResult` and summary structure so the API and frontend stay unchanged.
+If you want, I can also update the stale root `requirements.txt` and any old frontend docs so the rest of the repo matches this README.
